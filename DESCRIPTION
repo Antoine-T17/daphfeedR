@@ -1,0 +1,20 @@
+Package: daphFeedR
+Title: Calibration and Feeding Helper for Daphnia Nutrition
+Version: 0.0.1
+Authors@R: 
+    person("Antoine", "Tourret", email = "antoinetourretpro@gmail.com", role = c("aut", "cre"))
+Description: Shiny tools to visualize algal calibration curves and calculate
+    preparation volumes for Daphnia feeding solutions.
+License: MIT + file LICENSE
+Encoding: UTF-8
+Roxygen: list(markdown = TRUE)
+RoxygenNote: 7.3.2
+Imports:
+    shiny,
+    dplyr,
+    ggplot2,
+    readxl,
+    scales,
+    ggiraph,
+    bslib,
+    shinydashboard
