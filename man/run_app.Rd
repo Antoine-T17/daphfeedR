@@ -2,10 +2,10 @@
 % Please edit documentation in R/run_app.R
 \name{run_app}
 \alias{run_app}
-\title{Run daphFeedR}
+\title{Run daphfeedR}
 \usage{
 run_app(..., launch.browser = TRUE)
 }
 \description{
-Run daphFeedR
+Run daphfeedR
 }
