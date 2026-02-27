@@ -10,11 +10,11 @@ library(shinydashboard)
 ui <- bslib::page_navbar(
   title = "Nutrition des daphnies",
   theme = bslib::bs_theme(version = 5, bootswatch = "flatly"),
-  
+
   # ---- Page 1 : Visualisation ----
   bslib::nav_panel(
     "Visualisation",
-    
+
     bslib::layout_sidebar(
       sidebar = bslib::sidebar(
         width = 320,
@@ -29,17 +29,25 @@ ui <- bslib::page_navbar(
           "reg_mode", "Mode de régression",
           choices = c("Poolée par espèce", "Par date et espèce"),
           selected = "Poolée par espèce"
+        ),
+        selectizeInput(
+          "dates_selected",
+          "Dates à inclure",
+          choices = NULL,
+          selected = NULL,
+          multiple = TRUE,
+          options = list(placeholder = "Sélectionner une ou plusieurs dates")
         )
       ),
-      
+
       div(
         style = "display: flex; flex-direction: column; gap: 14px; width: 100%;",
-        
+
         bslib::card(
           full_screen = TRUE,
           girafeOutput("plot_final", width = "100%", height = "700px")
         ),
-        
+
         bslib::card(
           bslib::card_header("Équations et R²"),
           div(
@@ -50,17 +58,17 @@ ui <- bslib::page_navbar(
       )
     )
   ),
-  
+
   # ---- Page 2 : Calculs ----
   bslib::nav_panel(
     "Calculs",
-    
+
     bslib::layout_column_wrap(
       width = 1,
-      
+
       bslib::card(
         bslib::card_header("Calcul solution inconnue"),
-        
+
         fluidRow(
           column(
             width = 6,
@@ -81,7 +89,7 @@ ui <- bslib::page_navbar(
             numericInput("pita_ratio", "Ratio concentration (Pita)", value = 144000)
           )
         ),
-        
+
         fluidRow(
           column(
             width = 4,
@@ -89,7 +97,7 @@ ui <- bslib::page_navbar(
           )
         )
       ),
-      
+
       bslib::card(
         bslib::card_header("Résultats"),
         tableOutput("unknown_table")
@@ -99,23 +107,50 @@ ui <- bslib::page_navbar(
 )
 
 server <- function(input, output, session) {
-  
+
   # =========================
   # Données brutes Excel
   # =========================
   df_data <- reactive({
     req(input$file)
-    
+
     df <- read_excel(input$file$datapath, sheet = input$sheet)
-    
+
     names(df) <- c(
       "sample", "date", "species", "FD", "inv_FD", "A1", "A2", "A3",
       "A_mean", "A_var", "A_sd", "A_sem",
       "C_mean", "C_sem", "C_mean_fd", "C_sem_fd"
     )
-    
-    df$date <- as.factor(df$date)
-    
+
+    # --- Gestion robuste + tri chronologique des dates ---
+    raw_date <- df$date
+
+    date_chr <- if (inherits(raw_date, "Date") || inherits(raw_date, "POSIXt")) {
+      format(as.Date(raw_date), "%d/%m/%Y")
+    } else {
+      as.character(raw_date)
+    }
+
+    date_try1 <- suppressWarnings(as.Date(date_chr, format = "%d/%m/%Y"))
+    date_try2 <- suppressWarnings(as.Date(date_chr))
+    date_order <- dplyr::coalesce(date_try1, date_try2)
+
+    date_levels <- df %>%
+      mutate(
+        date_chr = date_chr,
+        date_order = date_order
+      ) %>%
+      distinct(date_chr, date_order) %>%
+      arrange(is.na(date_order), date_order, date_chr) %>%
+      pull(date_chr)
+
+    df <- df %>%
+      mutate(
+        date_chr = date_chr,
+        date_order = date_order,
+        date = factor(date_chr, levels = date_levels)
+      )
+
     df %>%
       mutate(
         lower_y = A_mean - A_sem,
@@ -124,46 +159,83 @@ server <- function(input, output, session) {
         upper_x = C_mean_fd + C_sem_fd,
         tooltip_txt = paste0(
           "Espèce : ", species,
-          "\nDate : ", date,
+          "\nDate : ", as.character(date),
           "\nConcentration : ", format(round(C_mean_fd, 0), big.mark = " ", scientific = FALSE),
           " cellules/mL",
           "\nAbsorbance : ", format(round(A_mean, 3), decimal.mark = ",")
         )
       )
   })
-  
+
+  # =========================
+  # Mise à jour des dates sélectionnables
+  # =========================
+  observe({
+    req(input$file)
+    df <- df_data()
+
+    if (input$species_view != "Les deux") {
+      df <- df %>% filter(species == input$species_view)
+    }
+
+    date_choices <- df %>%
+      distinct(date, date_order) %>%
+      arrange(is.na(date_order), date_order, date) %>%
+      pull(date) %>%
+      as.character()
+
+    previous <- isolate(input$dates_selected)
+    selected_keep <- intersect(previous, date_choices)
+
+    if (length(selected_keep) == 0) {
+      selected_keep <- date_choices
+    }
+
+    updateSelectizeInput(
+      session,
+      "dates_selected",
+      choices = date_choices,
+      selected = selected_keep,
+      server = TRUE
+    )
+  })
+
   # =========================
   # Données filtrées pour la visualisation
   # =========================
   df_plot <- reactive({
     df <- df_data()
-    
+
     if (input$species_view != "Les deux") {
       df <- df %>% filter(species == input$species_view)
     }
-    
+
+    if (!is.null(input$dates_selected) && length(input$dates_selected) > 0) {
+      df <- df %>% filter(as.character(date) %in% input$dates_selected)
+    }
+
     req(nrow(df) > 0)
     df
   })
-  
+
   # =========================
-  # Modèles poolés (pour l'onglet Calculs)
+  # Modèles poolés (pour l'onglet Calculs) - inchangé
   # =========================
   calib_models <- reactive({
     df <- df_data()
-    
+
     list(
       chlorella = lm(A_mean ~ C_mean_fd, data = df %>% filter(species == "Chlorella")),
       pita      = lm(A_mean ~ C_mean_fd, data = df %>% filter(species == "Pita"))
     )
   })
-  
+
   # =========================
   # Tableau des régressions (visualisation)
   # =========================
   reg_summary <- reactive({
     df <- df_plot()
-    
+
     fit_one <- function(dat) {
       if (nrow(dat) < 2 || dplyr::n_distinct(dat$C_mean_fd) < 2) {
         return(tibble(
@@ -172,23 +244,23 @@ server <- function(input, output, session) {
           r2 = NA_real_
         ))
       }
-      
+
       mod <- lm(A_mean ~ C_mean_fd, data = dat)
       co <- coef(mod)
-      
+
       tibble(
         slope = unname(co["C_mean_fd"]),
         intercept = unname(co["(Intercept)"]),
         r2 = unname(summary(mod)$r.squared)
       )
     }
-    
+
     if (input$reg_mode == "Poolée par espèce") {
       out <- df %>%
         group_by(species) %>%
         group_modify(~ fit_one(.x)) %>%
         ungroup() %>%
-        mutate(date_lab = "Toutes")
+        mutate(date_lab = "Dates sélectionnées")
     } else {
       out <- df %>%
         group_by(species, date) %>%
@@ -196,7 +268,7 @@ server <- function(input, output, session) {
         ungroup() %>%
         mutate(date_lab = as.character(date))
     }
-    
+
     out %>%
       mutate(
         Equation = ifelse(
@@ -218,90 +290,84 @@ server <- function(input, output, session) {
         `R²`
       )
   })
-  
+
   output$reg_table <- renderTable({
     reg_summary()
   },
   striped = TRUE, bordered = TRUE, spacing = "s", na = "")
-  
+
   # =========================
-  # Calcul solution inconnue (reste poolé)
+  # Calcul solution inconnue (reste poolé sur toutes les dates)
   # =========================
   unknown_calc <- reactive({
     req(input$file)
     mods <- calib_models()
-    
-    # Coefficients y = a*x + b
+
     co_chl <- coef(mods$chlorella)
     a_chl <- unname(co_chl["C_mean_fd"])
     b_chl <- unname(co_chl["(Intercept)"])
-    
+
     co_pit <- coef(mods$pita)
     a_pit <- unname(co_pit["C_mean_fd"])
     b_pit <- unname(co_pit["(Intercept)"])
-    
-    # Valeurs absorbance inconnue
+
     A_chl_vals <- c(input$chl_a1, input$chl_a2, input$chl_a3)
     A_pit_vals <- c(input$pita_a1, input$pita_a2, input$pita_a3)
-    
+
     A_chl_mean <- mean(A_chl_vals, na.rm = TRUE)
     A_pit_mean <- mean(A_pit_vals, na.rm = TRUE)
-    
+
     if (all(is.na(A_chl_vals))) A_chl_mean <- NA_real_
     if (all(is.na(A_pit_vals))) A_pit_mean <- NA_real_
-    
-    # Concentration calculée par la droite = concentration mesurée (solution diluée)
+
     C_chl_measured <- if (!is.na(A_chl_mean) && !is.na(a_chl) && a_chl != 0) {
       (A_chl_mean - b_chl) / a_chl
     } else {
       NA_real_
     }
-    
+
     C_pit_measured <- if (!is.na(A_pit_mean) && !is.na(a_pit) && a_pit != 0) {
       (A_pit_mean - b_pit) / a_pit
     } else {
       NA_real_
     }
-    
-    # Correction par le facteur de dilution de mesure
+
     C_chl_unknown <- if (!is.na(C_chl_measured) && !is.na(input$chl_meas_fd)) {
       C_chl_measured * input$chl_meas_fd
     } else {
       NA_real_
     }
-    
+
     C_pit_unknown <- if (!is.na(C_pit_measured) && !is.na(input$pita_meas_fd)) {
       C_pit_measured * input$pita_meas_fd
     } else {
       NA_real_
     }
-    
-    # Facteur de dilution pour préparation = concentration inconnue / ratio cible
+
     FD_chl <- if (!is.na(C_chl_unknown) && !is.na(input$chl_ratio) && input$chl_ratio != 0) {
       C_chl_unknown / input$chl_ratio
     } else {
       NA_real_
     }
-    
+
     FD_pit <- if (!is.na(C_pit_unknown) && !is.na(input$pita_ratio) && input$pita_ratio != 0) {
       C_pit_unknown / input$pita_ratio
     } else {
       NA_real_
     }
-    
-    # Volume à pipetter = volume final / facteur de dilution
+
     Vpip_chl <- if (!is.na(FD_chl) && !is.na(input$final_volume_ml) && FD_chl != 0) {
       input$final_volume_ml / FD_chl
     } else {
       NA_real_
     }
-    
+
     Vpip_pit <- if (!is.na(FD_pit) && !is.na(input$final_volume_ml) && FD_pit != 0) {
       input$final_volume_ml / FD_pit
     } else {
       NA_real_
     }
-    
+
     data.frame(
       Espece = c("Chlorella", "Pita"),
       Abs1 = c(input$chl_a1, input$pita_a1),
@@ -317,10 +383,10 @@ server <- function(input, output, session) {
       Volume_a_pipetter_mL = c(Vpip_chl, Vpip_pit)
     )
   })
-  
+
   output$unknown_table <- renderTable({
     out <- unknown_calc()
-    
+
     out %>%
       mutate(
         Abs_moyenne = round(Abs_moyenne, 4),
@@ -331,13 +397,13 @@ server <- function(input, output, session) {
         Volume_a_pipetter_mL = round(Volume_a_pipetter_mL, 3)
       )
   }, striped = TRUE, bordered = TRUE, spacing = "s")
-  
+
   # =========================
   # Figure interactive
   # =========================
   output$plot_final <- renderGirafe({
     df <- df_plot()
-    
+
     p <- ggplot(df, aes(x = C_mean_fd, y = A_mean)) +
       geom_point_interactive(
         aes(
@@ -357,7 +423,7 @@ server <- function(input, output, session) {
         orientation = "y",
         width = 0
       )
-    
+
     if (input$reg_mode == "Poolée par espèce") {
       p <- p +
         geom_smooth(
@@ -378,7 +444,7 @@ server <- function(input, output, session) {
           se = FALSE
         )
     }
-    
+
     p <- p +
       labs(
         x = "Concentration cellulaire (cellules/mL)",
@@ -395,7 +461,7 @@ server <- function(input, output, session) {
       ) +
       scale_color_manual(values = c("Chlorella" = "#04721F", "Pita" = "#9AFF1F")) +
       scale_x_continuous(labels = label_number(big.mark = "", decimal.mark = ","))
-    
+
     girafe(
       ggobj = p,
       options = list(
