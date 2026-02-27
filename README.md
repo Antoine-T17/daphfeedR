@@ -1,4 +1,4 @@
-<img src="inst/app/www/my_sticker.png" style="float:right; width:220px;" />
+<img src="inst/app/www/my_sticker.png" align="right" width="140" />
 
 ## How to run the app (local)
 
