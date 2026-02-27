@@ -1,3 +1,5 @@
+<img src="inst/app/www/my_sticker.png" align="right" width="100" />
+
 ## How to run the app (local)
 
 Copy/paste the following lines into the R console in RStudio :
